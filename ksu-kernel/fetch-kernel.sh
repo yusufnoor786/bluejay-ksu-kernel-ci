@@ -16,8 +16,16 @@ ASSET=bluejay-kernel-ksu.tar.gz
 STAMP="$DEST/.ksu-kernel-release"
 
 log() { echo "[ksu-kernel] $*" >&2; }
-# download <url> <out>: curl, else wget, else python3 (the Android build needs python3 anyway).
-# KSU_DL_TOOL=curl|wget|python forces one (testing).
+# The Android build puts its own prebuilt python3 (no CA certificates) first on PATH, so for the
+# python fallback prefer the system python and load the system CA bundle. TLS verification is
+# never turned off (the tarball is also sha256-checked).
+pick_python() {
+  local p
+  for p in /usr/bin/python3 /usr/local/bin/python3; do [ -x "$p" ] && { echo "$p"; return; }; done
+  command -v python3
+}
+
+# download <url> <out>: curl, else wget, else python3.  KSU_DL_TOOL=curl|wget|python forces one.
 dl() {
   local url=$1 out=$2 tool=${KSU_DL_TOOL:-}
   if [ -z "$tool" ]; then
@@ -28,15 +36,30 @@ dl() {
   case $tool in
     curl)   curl -fsSL --retry 3 --max-time 600 -o "$out" "$url" ;;
     wget)   wget -q -t 3 -T 60 -O "$out" "$url" ;;
-    python) python3 - "$url" "$out" <<'PY'
-import sys, urllib.request
-req = urllib.request.Request(sys.argv[1], headers={"User-Agent": "ksu-kernel-fetch"})
-with urllib.request.urlopen(req, timeout=120) as r, open(sys.argv[2], "wb") as f:
-    while True:
-        b = r.read(1 << 20)
-        if not b:
+    python) "$(pick_python)" - "$url" "$out" <<'PY'
+import os, ssl, sys, urllib.request
+
+CANDIDATES = [os.environ.get("SSL_CERT_FILE", ""),
+              "/etc/ssl/certs/ca-certificates.crt",   # Debian/Ubuntu
+              "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL/Fedora
+              "/etc/ssl/ca-bundle.pem",               # openSUSE
+              "/etc/ssl/cert.pem"]                    # Alpine/macOS
+ctx = ssl.create_default_context()
+if not ctx.cert_store_stats().get("x509_ca"):
+    for c in CANDIDATES:
+        if c and os.path.isfile(c) and os.path.getsize(c) > 0:
+            ctx = ssl.create_default_context(cafile=c)
             break
-        f.write(b)
+req = urllib.request.Request(sys.argv[1], headers={"User-Agent": "ksu-kernel-fetch"})
+try:
+    with urllib.request.urlopen(req, timeout=120, context=ctx) as r, open(sys.argv[2], "wb") as f:
+        while True:
+            b = r.read(1 << 20)
+            if not b:
+                break
+            f.write(b)
+except Exception as e:
+    sys.exit("download failed: %s (install curl or ca-certificates, or set SSL_CERT_FILE)" % e)
 PY
     ;;
   esac

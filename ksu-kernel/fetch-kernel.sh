@@ -16,6 +16,31 @@ ASSET=bluejay-kernel-ksu.tar.gz
 STAMP="$DEST/.ksu-kernel-release"
 
 log() { echo "[ksu-kernel] $*" >&2; }
+# download <url> <out>: curl, else wget, else python3 (the Android build needs python3 anyway).
+# KSU_DL_TOOL=curl|wget|python forces one (testing).
+dl() {
+  local url=$1 out=$2 tool=${KSU_DL_TOOL:-}
+  if [ -z "$tool" ]; then
+    if command -v curl >/dev/null 2>&1; then tool=curl
+    elif command -v wget >/dev/null 2>&1; then tool=wget
+    else tool=python; fi
+  fi
+  case $tool in
+    curl)   curl -fsSL --retry 3 --max-time 600 -o "$out" "$url" ;;
+    wget)   wget -q -t 3 -T 60 -O "$out" "$url" ;;
+    python) python3 - "$url" "$out" <<'PY'
+import sys, urllib.request
+req = urllib.request.Request(sys.argv[1], headers={"User-Agent": "ksu-kernel-fetch"})
+with urllib.request.urlopen(req, timeout=120) as r, open(sys.argv[2], "wb") as f:
+    while True:
+        b = r.read(1 << 20)
+        if not b:
+            break
+        f.write(b)
+PY
+    ;;
+  esac
+}
 have_kernel() { [ -f "$DEST/boot.img" ] && ls "$DEST"/*.ko >/dev/null 2>&1; }
 
 if [ "${KSU_KERNEL_SKIP:-0}" = 1 ]; then log "skipped (KSU_KERNEL_SKIP=1)"; exit 0; fi
@@ -29,7 +54,7 @@ if [ -n "${KSU_KERNEL_LOCAL_DIR:-}" ]; then
 else
   if [ -n "${KSU_KERNEL_TAG:-}" ]; then API="https://api.github.com/repos/$REPO/releases/tags/$KSU_KERNEL_TAG"
   else API="https://api.github.com/repos/$REPO/releases/latest"; fi
-  if ! curl -fsSL --retry 2 --max-time 60 -o "$TMP/release.json" "$API"; then
+  if ! dl "$API" "$TMP/release.json"; then
     if have_kernel; then log "WARNING: cannot reach GitHub, using existing kernel files in $DEST"; exit 0; fi
     log "ERROR: cannot reach $API and $DEST has no kernel files"; exit 1
   fi
@@ -49,14 +74,18 @@ fi
 
 log "fetching kernel release $TAG"
 if [ -z "${KSU_KERNEL_LOCAL_DIR:-}" ]; then
-  curl -fL --retry 3 -o "$TMP/$ASSET" "$URL" >&2 || { log "ERROR: download failed"; exit 1; }
-  curl -fsSL --retry 3 -o "$TMP/$ASSET.sha256" "$SHAURL" || { log "ERROR: checksum download failed"; exit 1; }
+  dl "$URL" "$TMP/$ASSET" || { log "ERROR: download failed"; exit 1; }
+  dl "$SHAURL" "$TMP/$ASSET.sha256" || { log "ERROR: checksum download failed"; exit 1; }
 fi
 
 ( cd "$TMP" && sha256sum -c "$ASSET.sha256" >&2 ) || { log "ERROR: checksum mismatch, not installing"; exit 1; }
 
+# extract to a temp dir first; only touch the kernel dir once the archive is known good
+mkdir -p "$TMP/x"
+tar -xzf "$TMP/$ASSET" -C "$TMP/x" || { log "ERROR: extract failed, existing files left untouched"; exit 1; }
+[ -f "$TMP/x/boot.img" ] || { log "ERROR: archive has no boot.img, existing files left untouched"; exit 1; }
 # replace only the generated binaries (they are .gitignored); keep Lineage's tracked text lists
 find "$DEST" -maxdepth 1 -type f \( -name '*.ko' -o -name '*.img' -o -name '*.dtb' -o -name '*.dtbo' \) -delete
-tar -xzf "$TMP/$ASSET" -C "$DEST" || { log "ERROR: extract failed"; exit 1; }
+cp -p "$TMP"/x/* "$DEST"/ || { log "ERROR: copy into $DEST failed"; exit 1; }
 echo "$TAG" > "$STAMP"
 log "installed $TAG into $DEST ($(ls "$DEST"/*.ko | wc -l) modules)"

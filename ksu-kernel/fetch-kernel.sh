@@ -8,6 +8,8 @@
 #        KSU_KERNEL_TAG       pin a release tag               (default: latest)
 #        KSU_KERNEL_LOCAL_DIR dir holding bluejay-kernel-ksu.tar.gz[.sha256] (offline / testing)
 #        KSU_KERNEL_SKIP=1    do nothing (use whatever is already in <dest_dir>)
+#        KSU_KERNEL_OFFLINE=1 never touch the network; only check that <dest_dir> has a kernel.
+#                             Used by device-bluejay.mk: the Android build (soong_ui) forbids curl/wget.
 set -uo pipefail
 
 DEST=${1:?dest dir}
@@ -68,6 +70,12 @@ have_kernel() { [ -f "$DEST/boot.img" ] && ls "$DEST"/*.ko >/dev/null 2>&1; }
 
 if [ "${KSU_KERNEL_SKIP:-0}" = 1 ]; then log "skipped (KSU_KERNEL_SKIP=1)"; exit 0; fi
 if [ ! -d "$DEST" ]; then log "ERROR: $DEST does not exist (is device/google/bluejay-kernels synced?)"; exit 1; fi
+
+if [ "${KSU_KERNEL_OFFLINE:-0}" = 1 ]; then
+  if have_kernel; then log "using kernel in $DEST ($(cat "$STAMP" 2>/dev/null || echo unknown release))"; exit 0; fi
+  log "ERROR: no kernel in $DEST. Run: ksu_kernel_update   (or re-run: source build/envsetup.sh)"
+  exit 1
+fi
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 

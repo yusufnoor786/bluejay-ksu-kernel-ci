@@ -67,12 +67,18 @@ PY
   esac
 }
 have_kernel() { [ -f "$DEST/boot.img" ] && ls "$DEST"/*.ko >/dev/null 2>&1; }
+# the files in DEST must come from a KSU release (stamp file), otherwise KernelSU is NOT in the kernel
+warn_unstamped() {
+  [ -f "$STAMP" ] && return 0
+  log "WARNING: the kernel files in $DEST were NOT installed from a KernelSU-Next release (no $(basename "$STAMP"))."
+  log "WARNING: boot.img there is probably an unpatched kernel, so KernelSU-Next will NOT work. Run: ksu_kernel_update"
+}
 
 if [ "${KSU_KERNEL_SKIP:-0}" = 1 ]; then log "skipped (KSU_KERNEL_SKIP=1)"; exit 0; fi
 if [ ! -d "$DEST" ]; then log "ERROR: $DEST does not exist (is device/google/bluejay-kernels synced?)"; exit 1; fi
 
 if [ "${KSU_KERNEL_OFFLINE:-0}" = 1 ]; then
-  if have_kernel; then log "using kernel in $DEST ($(cat "$STAMP" 2>/dev/null || echo unknown release))"; exit 0; fi
+  if have_kernel; then warn_unstamped; log "using kernel in $DEST ($(cat "$STAMP" 2>/dev/null || echo unknown release))"; exit 0; fi
   log "ERROR: no kernel in $DEST. Run: ksu_kernel_update   (or re-run: source build/envsetup.sh)"
   exit 1
 fi
@@ -86,7 +92,7 @@ else
   if [ -n "${KSU_KERNEL_TAG:-}" ]; then API="https://api.github.com/repos/$REPO/releases/tags/$KSU_KERNEL_TAG"
   else API="https://api.github.com/repos/$REPO/releases/latest"; fi
   if ! dl "$API" "$TMP/release.json"; then
-    if have_kernel; then log "WARNING: cannot reach GitHub, using existing kernel files in $DEST"; exit 0; fi
+    if have_kernel; then log "WARNING: cannot reach GitHub, using existing kernel files in $DEST"; warn_unstamped; exit 0; fi
     log "ERROR: cannot reach $API and $DEST has no kernel files"; exit 1
   fi
   read -r TAG URL SHAURL < <(python3 - "$TMP/release.json" "$ASSET" <<'PY'

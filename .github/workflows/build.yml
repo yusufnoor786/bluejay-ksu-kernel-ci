@@ -1,0 +1,69 @@
+name: build-kernel
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: write
+
+env:
+  MANIFEST_URL: https://github.com/yusufnoor786/android_kernel_google_gs-6.1_manifest.git
+  MANIFEST_BRANCH: lineage-24.0
+  KSUD_URL: https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.2/ksud-x86_64-unknown-linux-musl
+  KSUD_SHA256: 4d22f89416e7eef8f684f1ed03d2bea19da33c7d41266546e94fd7d1f6cbeca9
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install repo
+        run: |
+          mkdir -p ~/.bin
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/.bin/repo
+          chmod +x ~/.bin/repo
+          echo "$HOME/.bin" >> "$GITHUB_PATH"
+          git config --global user.name ci && git config --global user.email ci@example.com
+          git config --global color.ui false
+
+      - name: Sync kernel tree
+        run: |
+          mkdir -p "$HOME/kernel" && cd "$HOME/kernel"
+          repo init -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH" --depth=1 </dev/null
+          repo sync -c -j8 --no-tags --no-clone-bundle
+
+      - name: Build kernel and KernelSU-Next module
+        run: |
+          cd "$HOME/kernel"
+          ./build_bluejay.sh -- --dist_dir="$HOME/dist"
+          tools/bazel build --config=bluejay //private/google-modules/kernelsu:kernelsu
+          cp -L "$(find -L bazel-bin/private/google-modules/kernelsu -name kernelsu.ko | head -1)" "$HOME/kernelsu.ko"
+
+      - name: Fetch ksud (pinned checksum)
+        run: |
+          curl -fsSL "$KSUD_URL" -o "$HOME/ksud"
+          echo "$KSUD_SHA256  $HOME/ksud" | sha256sum -c -
+          chmod +x "$HOME/ksud"
+
+      - name: Patch boot image and package
+        run: scripts/package.sh "$HOME/dist" "$HOME/kernelsu.ko" "$HOME/ksud" "$HOME/release"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="kernel-$(date -u +%Y%m%d-%H%M)"
+          cd "$HOME/release"
+          gh release create "$TAG" bluejay-kernel-ksu.tar.gz bluejay-kernel-ksu.tar.gz.sha256 \
+            --repo "$GITHUB_REPOSITORY" --title "$TAG" \
+            --notes "Lineage gs-6.1 kernel for bluejay, KernelSU-Next v3.4.2 patched boot.img (LKM). Manifest: $MANIFEST_URL@$MANIFEST_BRANCH"

@@ -53,4 +53,5 @@ if [ "${1:-}" = "--fix" ]; then
   [ -x "$DEV/ksu-kernel/install-build-hook.sh" ] && ( cd "$TOP" && ANDROID_BUILD_TOP="$TOP" "$DEV/ksu-kernel/install-build-hook.sh" )
   [ -x "$DEV/ksu-kernel/patch-kernel.sh" ] && ( cd "$TOP" && ANDROID_BUILD_TOP="$TOP" "$DEV/ksu-kernel/patch-kernel.sh" )
 fi
+if [ "${1:-}" = "--fix" ]; then echo; echo "re-checking after --fix:"; exec "$0"; fi
 echo; echo "$FAILS problem(s) found."

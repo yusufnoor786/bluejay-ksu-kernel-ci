@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Put this file in <rom source>/.repo/local_manifests/ then run `repo sync`.
+     It makes the ROM use the bluejay device tree fork that fetches the KernelSU-Next kernel at lunch. -->
+<manifest>
+  <remote name="ksu" fetch="https://github.com/yusufnoor786" />
+  <project path="device/google/bluejay" name="android_device_google_bluejay" remote="ksu" revision="lineage-24.0" />
+</manifest>
